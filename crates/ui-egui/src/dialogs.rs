@@ -1254,6 +1254,14 @@ impl Dialog {
             input.multi = true;
         }
         for sel in preselection {
+            // A sketch chain also carries the owning sketch, like a direct curve pick.
+            let curve = match sel {
+                Sel::ExternalSketchCurve { sketch, id } if matches!(d.kind, Kind::AnglePlane { .. }) => {
+                    Some(Sel::SketchCurve { id: id.clone(), sketch: Some(*sketch) })
+                }
+                _ => None,
+            };
+            let sel = curve.as_ref().unwrap_or(sel);
             if !matches!(d.kind, Kind::OffsetPlane { .. } | Kind::Construct { .. }) && is_wire_point(s, sel) {
                 continue;
             }
@@ -1763,6 +1771,16 @@ impl Dialog {
         if let Some(target) = self.extrude_target(s, h) {
             return Some(target);
         }
+        if matches!(self.kind, Kind::AnglePlane { .. })
+            && self.active == 0
+            && sels(self, 0).is_empty()
+            && let Hit::SketchCurve { sketch, id, straight: true, .. } = h
+        {
+            let pick = selection::curve_pick(id, *sketch, s.active_sketch);
+            if angle_plane_sketch_line(s, &pick).is_some() {
+                return Some(pick);
+            }
+        }
         let inp = self.active_input()?;
         if self.takes_components() {
             return match h {
@@ -1965,6 +1983,10 @@ impl Dialog {
         }
         if self.take_extrude_target(s, &sel) {
             return;
+        }
+        if matches!(self.kind, Kind::AnglePlane { .. }) && self.active == 0 && sels(self, 0).is_empty() && angle_plane_sketch_line(s, &sel).is_some()
+        {
+            self.active = 1;
         }
         if let Some(key) = stored_input_reference_key(self, self.active) {
             self.extra.remove(key);
@@ -5020,7 +5042,9 @@ pub(crate) fn confirm(app: &mut SolveApp) {
 pub(crate) fn right_click(app: &mut SolveApp) {
     let Some(mut d) = app.dialog.take() else { return };
     if enter_applies(&d) && app.applying.is_none() {
-        let empty = |i: &usize| d.inputs.get(*i).is_some_and(|input| input.items.is_empty());
+        let sketch_base =
+            matches!(d.kind, Kind::AnglePlane { .. }) && sels(&d, 1).first().is_some_and(|sel| angle_plane_sketch_line(&app.session, sel).is_some());
+        let empty = |i: &usize| (*i != 0 || !sketch_base) && d.inputs.get(*i).is_some_and(|input| input.items.is_empty());
         let next = (d.active.saturating_add(1)..d.inputs.len()).chain(0..d.active.min(d.inputs.len())).find(empty);
         match d.active_input().filter(|input| input.items.is_empty()) {
             // An empty input is optional when the dialog makes its feature without it.
@@ -6536,13 +6560,20 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
             }
         }
         Kind::AnglePlane { direction_only, .. } => {
-            need(0, "a plane")?;
-            let base = plane_arg(app, sels(d, 0).first())?;
-            let axis = match sels(d, 1).first() {
-                Some(x) => axis_param(app, x)?,
-                None => d.extra.get("axis").cloned().ok_or("pick an axis")?,
+            let axis = sels(d, 1).first();
+            let mut p = if sels(d, 0).is_empty()
+                && let Some((sketch, curve)) = axis.and_then(|sel| angle_plane_sketch_line(&app.session, sel))
+            {
+                json!({"sketch_line": {"sketch": sketch, "curve": curve}, "direction_only": direction_only})
+            } else {
+                need(0, "a plane")?;
+                let base = plane_arg(app, sels(d, 0).first())?;
+                let axis = match axis {
+                    Some(x) => axis_param(app, x)?,
+                    None => d.extra.get("axis").cloned().ok_or("pick an axis")?,
+                };
+                json!({"base": base, "axis": axis, "direction_only": direction_only})
             };
-            let mut p = json!({"base": base, "axis": axis, "direction_only": direction_only});
             if *direction_only && let Some(pivot) = angle_pivot(d) {
                 p["pivot"] = construct_ref(app, pivot)?;
             }
@@ -7424,6 +7455,16 @@ pub(crate) fn axis_param(app: &SolveApp, sel: &Sel) -> Result<Value, String> {
     }
     let (o, dir) = axis_of(app, sel).ok_or(AXIS_PICK)?;
     Ok(json!({"origin": pt(o), "dir": pt(dir)}))
+}
+
+/// Only a 2D line has a sketch plane to use as the angle's reference.
+fn angle_plane_sketch_line<'a>(s: &Session, sel: &'a Sel) -> Option<(u64, &'a str)> {
+    let Sel::SketchCurve { id, sketch } = sel else { return None };
+    let sketch = sketch.or(s.active_sketch)?;
+    let st = crate::open_meshing::session_world(s);
+    let ss = st.sketch(sketch)?;
+    let c = ss.sketch.curves.get(ss.sketch.curve_index(id)?)?;
+    matches!(c.kind, solidcraft_engine::sketch::CurveKind::Line { .. }).then_some((sketch, id.as_str()))
 }
 
 const AXIS_PICK: &str =
@@ -8819,14 +8860,16 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
         FeatureKind::ConstructionPlane { plane: PlaneRef::AtAngle { base, axis_origin, axis_dir, line, direction_only, pivot, .. } } => {
             let mut d = start("construct.plane.at_angle")?;
             d.kind = Kind::simple_restore(&f.kind)?;
+            let sketch_line = matches!(line.as_deref(), Some(solidcraft_engine::doc::construct::GeoRef::SketchCurve { .. }));
             if let Some(inp) = d.inputs.first_mut() {
-                inp.items = plane_sel(s, base).into_iter().collect();
+                inp.items = if sketch_line { Vec::new() } else { plane_sel(s, base).into_iter().collect() };
             }
             // The line's origin goes back as stored: numbers, or the length expressions it follows.
             let at_zero = axis_origin.iter().all(|e| e.trim().parse::<f64>().is_ok_and(|v| v.abs() < 1e-9));
             let origin: Vec<Value> =
                 axis_origin.iter().map(|e| e.trim().parse::<f64>().map_or_else(|_| json!(e.to_string()), |v| json!(v))).collect();
             let pick = match line {
+                Some(g) if sketch_line => saved_pick(s, g),
                 Some(g) => model_axis_sel(s, g),
                 None => world_axis(*axis_dir).filter(|_| at_zero).map(|name| Sel::Axis { name }),
             };

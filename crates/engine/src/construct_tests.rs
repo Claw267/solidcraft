@@ -852,6 +852,66 @@ fn disambiguated_top_plane_pocket_survives_undo_and_cold_reopen() {
     assert!((measured["total"]["volume_mm3"].as_f64().unwrap() - expected).abs() < 1e-6, "{measured}");
 }
 
+#[test]
+fn plane_at_angle_from_one_line_follows_its_sketch_and_survives_reopening() {
+    use solidcraft_doc::{FeatureKind, PlaneRef, construct::GeoRef};
+
+    let mut s = Session::default();
+    run(&mut s, "parameters.add", json!({"name":"rise","expression":"30 mm"}));
+    run(&mut s, "parameters.add", json!({"name":"height","expression":"12 mm"}));
+    run(&mut s, "construct.plane.offset", json!({"base":"YZ","offset":"height","name":"Shelf"}));
+    let sketch = run(&mut s, "sketch.create", json!({"plane":"Shelf"}))["sketch"].as_u64().unwrap();
+    run(&mut s, "sketch.line", json!({"points":[[0,0],[100,30]],"ids":["rail"]}));
+    run(&mut s, "sketch.constraint.coincident", json!({"a":"rail.start","b":"origin"}));
+    run(&mut s, "sketch.dimension", json!({"entities":["rail.start","rail.end"],"type":"horizontal","value":"100 mm"}));
+    run(&mut s, "sketch.dimension", json!({"entities":["rail.start","rail.end"],"type":"vertical","value":"rise"}));
+    run(&mut s, "sketch.circle.center", json!({"center":[30,30],"radius":5,"id":"ring"}));
+    run(&mut s, "sketch.finish", json!({}));
+    let pick = json!({"sketch":sketch,"curve":"rail"});
+    let zero = run(&mut s, "construct.plane.at_angle", json!({"sketch_line":pick,"angle":"0 deg","name":"Zero"}));
+    let made = run(&mut s, "construct.plane.at_angle", json!({"sketch_line":pick,"angle":"60 deg","name":"Tilt"}));
+    assert!(zero.get("param_warnings").is_none() && made.get("param_warnings").is_none());
+    let id = made["feature"].as_u64().unwrap();
+    for params in [
+        json!({"sketch_line":{"sketch":sketch,"curve":"missing"},"angle":10}),
+        json!({"sketch_line":{"sketch":sketch,"curve":"ring"},"angle":10}),
+        json!({"sketch_line":pick,"base":"XY","axis":"X","angle":10}),
+    ] {
+        assert!(s.execute("construct.plane.at_angle", &params).is_err(), "{params}");
+    }
+
+    let check = |s: &Session, rise: f64, height: f64| {
+        let base = plane(s, "Shelf");
+        let zero = plane(s, "Zero");
+        assert!(near(zero.origin, base.origin) && near(zero.normal(), base.normal()));
+        let tilted = plane(s, "Tilt");
+        assert!(tilted.height(base.to_world(solidcore_record::Vec2::ZERO)).abs() < 1e-6);
+        assert!(tilted.height(base.to_world(solidcore_record::Vec2::new(100.0, rise))).abs() < 1e-6);
+        assert!((tilted.normal().dot(base.normal()) - 0.5).abs() < 1e-6);
+        assert!((base.origin.x.abs() - height).abs() < 1e-6);
+        let FeatureKind::ConstructionPlane { plane: PlaneRef::AtAngle { line, angle, .. } } = &s.doc.feature(id).unwrap().kind else {
+            panic!("expected a plane at angle");
+        };
+        assert_eq!(line.as_deref(), Some(&GeoRef::SketchCurve { sketch, curve: "rail".into() }));
+        assert_eq!(angle.to_string(), "60 deg");
+        tilted
+    };
+    let before = check(&s, 30.0, 12.0);
+    run(&mut s, "parameters.change", json!({"name":"rise","expression":"70 mm"}));
+    assert!(!near(before.normal(), check(&s, 70.0, 12.0).normal()));
+
+    let dir = std::env::temp_dir().join(format!("solidcraft-angled-plane-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("tilted.sc");
+    run(&mut s, "file.save_as", json!({"path":path}));
+    let mut reopened = Session::default();
+    run(&mut reopened, "doc.open", json!({"path":path}));
+    let _ = std::fs::remove_dir_all(&dir);
+    check(&reopened, 70.0, 12.0);
+    run(&mut reopened, "parameters.change", json!({"name":"height","expression":"25 mm"}));
+    check(&reopened, 70.0, 25.0);
+}
+
 /// Plane at Angle with "use axis direction only": the axis direction is projected onto the base
 /// and the plane turns about a pivot on that plane (#12041).
 #[test]

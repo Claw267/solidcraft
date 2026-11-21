@@ -7130,7 +7130,8 @@ pub(crate) fn sketch_line_world(ss: &SolvedSketch, curve: &str) -> Result<(Vec3,
     let ci = ss.sketch.curve_index(curve).ok_or_else(|| DocError::Unknown(format!("sketch line `{curve}`")))?;
     match ss.sketch.curves.get(ci).map(|c| &c.kind) {
         Some(CurveKind::Line { a, b }) => {
-            let (pa, pb) = (ss.sketch.point(*a).unwrap_or_default(), ss.sketch.point(*b).unwrap_or_default());
+            let pa = ss.sketch.point(*a).ok_or_else(|| DocError::Invalid(format!("missing start of line `{curve}`")))?;
+            let pb = ss.sketch.point(*b).ok_or_else(|| DocError::Invalid(format!("missing end of line `{curve}`")))?;
             Ok((ss.plane.to_world(pa), ss.plane.dir_to_world(pb - pa)))
         }
         _ => Err(DocError::Invalid(format!("`{curve}` is not a line"))),

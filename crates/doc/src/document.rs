@@ -68,6 +68,8 @@ pub enum PlaneRef {
     /// found on each evaluation the same way; without `line`, `axis_origin`/`axis_dir` are the
     /// fixed axis (how designs saved before a construction axis was followed hold one), and
     /// `axis_origin` may hold length expressions the axis follows as the parameters change.
+    /// When `line` is a sketch curve, its solved sketch supplies both the base plane and
+    /// the straight axis. The saved base and axis coordinates record their positions at creation.
     /// With `direction_only`, only the axis direction is used: it is projected onto the base
     /// (nothing of that projection is kept as geometry) and the plane turns about the line
     /// through `pivot`, or through the base origin when `pivot` is absent.
@@ -5277,28 +5279,32 @@ impl Document {
                 Ok(b.offset(Self::eval_in(vals, distance, Kind::Length)?))
             }
             PlaneRef::AtAngle { base, axis_origin, axis_dir, angle, line, direction_only, pivot } => {
-                let b = self.resolve_plane_in(vals, base, depth + 1, component, st)?;
-                let a = Self::eval_in(vals, angle, Kind::Angle)?;
-                let (axis_origin, axis_dir) = match line {
-                    Some(g) => {
-                        let st = st.ok_or_else(|| DocError::Invalid("this plane is built from the model: evaluate first".into()))?;
-                        crate::construct::model_axis_in(Some(self), st, g, component)?
-                    }
-                    None => {
-                        let [x, y, z] = axis_origin;
-                        let o = Vec3::new(
-                            Self::eval_in(vals, x, Kind::Length)?,
-                            Self::eval_in(vals, y, Kind::Length)?,
-                            Self::eval_in(vals, z, Kind::Length)?,
-                        );
-                        // Up to and including 1e9 mm, the largest number a design file holds: an
-                        // origin saved at exactly that distance rebuilt before this check existed.
-                        if ![o.x, o.y, o.z].iter().all(|c| c.is_finite() && c.abs() <= 1e9) {
-                            return Err(DocError::Invalid("the plane's axis origin is out of range".into()));
-                        }
-                        (o, *axis_dir)
+                let model = || st.ok_or_else(|| DocError::Invalid("this plane is built from the model: evaluate first".into()));
+                let (b, axis_origin, axis_dir) = match line.as_deref() {
+                    Some(GeoRef::SketchCurve { sketch, curve }) => crate::construct::sketch_line_frame(model()?, *sketch, curve)?,
+                    other => {
+                        let b = self.resolve_plane_in(vals, base, depth + 1, component, st)?;
+                        let (origin, dir) = match other {
+                            Some(g) => crate::construct::model_axis_in(Some(self), model()?, g, component)?,
+                            None => {
+                                let [x, y, z] = axis_origin;
+                                let o = Vec3::new(
+                                    Self::eval_in(vals, x, Kind::Length)?,
+                                    Self::eval_in(vals, y, Kind::Length)?,
+                                    Self::eval_in(vals, z, Kind::Length)?,
+                                );
+                                // Up to and including 1e9 mm, the largest number a design file holds: an
+                                // origin saved at exactly that distance rebuilt before this check existed.
+                                if ![o.x, o.y, o.z].iter().all(|c| c.is_finite() && c.abs() <= 1e9) {
+                                    return Err(DocError::Invalid("the plane's axis origin is out of range".into()));
+                                }
+                                (o, *axis_dir)
+                            }
+                        };
+                        (b, origin, dir)
                     }
                 };
+                let a = Self::eval_in(vals, angle, Kind::Angle)?;
                 let (axis_origin, d) = if *direction_only {
                     let n = b.normal();
                     let in_plane = axis_dir - n * n.dot(axis_dir);

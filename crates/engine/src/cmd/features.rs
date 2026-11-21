@@ -210,7 +210,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .icon("plane_angle")
         .contract(&PLANE_AT_ANGLE_CONTRACT)
         .output(output_schema_for::<FeatureResult>)
-        .params("base: XY|XZ|YZ|plane name, or a planar face {face: [x,y,z], body?, index?, path?}; axis: X|Y|Z|construction axis name (followed: the plane moves with the axis)|{origin, dir} (origin: [x,y,z] of numbers or length expressions, followed as the parameters change) | {edge|face: [x,y,z]} (a straight or circular edge, or a cylinder, cone or torus face: about its axis, followed as the model changes); angle: expr; direction_only?: bool (default false: turn about the axis as a line; true: project the axis direction onto base and turn about the line through pivot, or the base origin); pivot?: point ref (only with direction_only; vertex, sketch point, construction point); name?"),
+        .params("base: XY|XZ|YZ|plane name, or a planar face {face: [x,y,z], body?, index?, path?}; alternatively sketch_line: {sketch: feature id, curve: line id} uses its sketch plane as the base and its line as the axis; axis: X|Y|Z|construction axis name (followed: the plane moves with the axis)|{origin, dir} (origin: [x,y,z] of numbers or length expressions, followed as the parameters change) | {edge|face: [x,y,z]} (a straight or circular edge, or a cylinder, cone or torus face: about its axis, followed as the model changes); angle: expr; direction_only?: bool (default false: turn about the axis as a line; true: project the axis direction onto base and turn about the line through pivot, or the base origin); pivot?: point ref (only with direction_only; vertex, sketch point, construction point); name?"),
     CommandSpec::new("solid.split_face", "Split Face", crate::checked!("solid.split_face", split_face))
         .at("SOLID", "MODIFY")
         .icon("split_face")
@@ -3389,10 +3389,21 @@ fn plane_offset(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn plane_angle(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "construct.plane.at_angle";
-    // The plane follows the edge, face or construction axis it turns about, or the length
-    // expressions of an `{origin, dir}` axis's origin.
-    let (axis_origin, axis_dir, line, axis_feature) = axis_line_exprs(s, p, cmd)?;
-    let line = line.or_else(|| axis_feature.map(|name| solidcraft_doc::construct::GeoRef::Axis { name }));
+    use solidcraft_doc::{PlaneRef, construct::GeoRef};
+    let sketch_line = p.get("sketch_line").filter(|v| !v.is_null());
+    let (axis_origin, axis_dir, line, sketch_base) = if let Some(pick) = sketch_line {
+        if ["base", "axis"].iter().any(|key| p.get(*key).is_some_and(|v| !v.is_null())) {
+            return Err(bad(cmd, "`sketch_line` replaces `base` and `axis`"));
+        }
+        let sketch = pick.get("sketch").and_then(Value::as_u64).ok_or_else(|| bad(cmd, "`sketch_line.sketch` must be a sketch id"))?;
+        let curve = str_(pick, "curve").ok_or_else(|| bad(cmd, "`sketch_line.curve` must name a straight sketch line"))?;
+        let (plane, origin, dir) =
+            solidcraft_doc::construct::sketch_line_frame(&*s.world_state()?, sketch, curve).map_err(|e| bad(cmd, format!("`sketch_line`: {e}")))?;
+        (solidcraft_doc::point_expr(origin), dir, Some(GeoRef::SketchCurve { sketch, curve: curve.into() }), Some(PlaneRef::Custom { plane }))
+    } else {
+        let (origin, dir, line, axis_feature) = axis_line_exprs(s, p, cmd)?;
+        (origin, dir, line.or_else(|| axis_feature.map(|name| GeoRef::Axis { name })), None)
+    };
     let angle = req_expr(cmd, p, "angle")?;
     check_expr(s, &angle, Kind::Angle, cmd, "angle")?;
     let line = line.map(Box::new);
@@ -3416,6 +3427,9 @@ fn plane_angle(s: &mut Session, p: &Value) -> Result<Value> {
         direction_only,
         pivot: pivot.clone(),
     };
+    if let Some(base) = sketch_base {
+        return add_feature(s, p, FeatureKind::ConstructionPlane { plane: at_angle(base) });
+    }
     // A planar body face: attached exactly, as a sketch on that face is, so the plane follows it.
     if let Some(face) = p.get("base").filter(|b| b.get("face").is_some()) {
         let base = super::sketch::face::capture(s, face, cmd)?;

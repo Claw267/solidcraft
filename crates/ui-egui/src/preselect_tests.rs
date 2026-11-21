@@ -3714,6 +3714,53 @@ fn plane_tool_opens_as_the_method_its_picks_call_for() {
     assert!(pl.normal().cross(Vec3::Z).len() < 1e-6 && (pl.origin.z - 10.0).abs() < 1e-6, "{pl:?}");
 }
 
+#[test]
+fn plane_at_angle_accepts_one_sketch_line_and_refills_it_for_editing() {
+    let mut h = crate::scenario::Harness::new();
+    h.app.home.open = false;
+    let sketch = h.app.run("sketch.create", json!({"plane":"XY"})).unwrap()["sketch"].as_u64().unwrap();
+    h.app.run("sketch.line", json!({"points":[[0,0],[60,20]],"ids":["rail"]})).unwrap();
+    h.app.run("sketch.finish", json!({})).unwrap();
+    h.step(&json!({"call":"ui.view","params":{"view":"top"}})).unwrap();
+    h.app.session.selection.clear();
+    h.app.start("construct.plane.at_angle");
+    h.frames(2);
+    h.step(&json!({"click":{"world":[24,8,0]}})).unwrap();
+    let pick = json!({"sketch":sketch,"curve":"rail"});
+    let d = h.app.dialog.as_ref().unwrap();
+    assert!(d.inputs[0].items.is_empty());
+    let command = &apply_commands(&h.app, d).unwrap()[0].1;
+    assert_eq!(command["sketch_line"], pick);
+    assert_eq!(command["angle"], "45 deg");
+    wait_feature_preview(&mut h);
+    h.step(&json!({"key":"Enter"})).unwrap();
+    h.frames(2);
+    assert!(h.app.dialog.is_none());
+
+    let id = h.app.session.doc.features.last().unwrap().id;
+    h.app.edit_feature(id);
+    h.frames(2);
+    let d = h.app.dialog.as_mut().unwrap();
+    assert!(d.inputs[0].items.is_empty());
+    assert_eq!(d.inputs[1].items, vec![Sel::SketchCurve { sketch: Some(sketch), id: "rail".into() }]);
+    if let Kind::AnglePlane { angle, .. } = &mut d.kind {
+        *angle = "30 deg".into();
+    }
+    wait_feature_preview(&mut h);
+    h.step(&json!({"key":"Enter"})).unwrap();
+    h.frames(2);
+    assert!(h.app.dialog.is_none());
+    let solidcraft_engine::doc::FeatureKind::ConstructionPlane { plane: solidcraft_engine::doc::PlaneRef::AtAngle { angle, line, .. } } =
+        &h.app.session.doc.feature(id).unwrap().kind
+    else {
+        panic!("expected a plane at angle");
+    };
+    assert_eq!(angle.to_string(), "30 deg");
+    assert!(
+        matches!(line.as_deref(), Some(solidcraft_engine::doc::construct::GeoRef::SketchCurve { sketch: id, curve }) if *id == sketch && curve == "rail")
+    );
+}
+
 /// Plane at Angle draws the tilted plane while its dialog is open, when created and when edited,
 /// and redraws it when the angle changes (it used to show only the picked plane and the label).
 #[test]

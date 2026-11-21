@@ -768,11 +768,13 @@ pub struct OffsetPlaneParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct PlaneAtAngleParams {
-    /// The plane to turn.
-    pub base: PlaneOrFace,
-    /// The axis it turns about. A picked edge's or face's axis points the way its largest
-    /// component is positive.
-    pub axis: AxisLine,
+    /// The explicit plane to turn. Required together with `axis` unless using `sketch_line`.
+    pub base: Option<PlaneOrFace>,
+    /// The explicit axis. A model edge or face axis points the way its largest component is positive.
+    pub axis: Option<AxisLine>,
+    /// A straight line in a 2D sketch. Uses that sketch's plane as the zero-angle reference.
+    /// Supply this in place of both `base` and `axis`.
+    pub sketch_line: Option<PlaneAngleSketchLine>,
     /// How far to turn, counterclockwise looking back along `axis`'s direction.
     pub angle: AngleExpr,
     /// Use only the axis direction (projected onto `base`), not the axis as a full line.
@@ -785,6 +787,15 @@ pub struct PlaneAtAngleParams {
     pub pivot: Option<GeoRefParam>,
     #[serde(flatten, deserialize_with = "feature_common")]
     pub common: PlaneCommon,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlaneAngleSketchLine {
+    /// The source sketch's feature id.
+    pub sketch: u64,
+    /// The line's curve id within that sketch.
+    pub curve: String,
 }
 
 /// Copy features or bodies across a plane: the features replayed mirrored, or the bodies copied
