@@ -2536,6 +2536,15 @@ fn redefine(s: &mut Session, p: &Value) -> Result<Value> {
     {
         *after = before.clone();
     }
+    // A previously saved sketch-line plane keeps the coordinate convention its sketches use.
+    if let (
+        FeatureKind::ConstructionPlane { plane: solidcraft_doc::PlaneRef::AtAngle { line: Some(before), anchor_origin: false, .. } },
+        FeatureKind::ConstructionPlane { plane: solidcraft_doc::PlaneRef::AtAngle { anchor_origin, .. } },
+    ) = (&old.kind, &mut new.kind)
+        && matches!(before.as_ref(), solidcraft_doc::construct::GeoRef::SketchCurve { .. })
+    {
+        *anchor_origin = false;
+    }
     // A perforation keeps its outline through an edit that names no sketch (the Perforate dialog has no outline).
     if let (FeatureKind::SheetPerforate { sketch: Some(before), profiles: picked, .. }, FeatureKind::SheetPerforate { sketch, profiles, .. }) =
         (&old.kind, &mut new.kind)

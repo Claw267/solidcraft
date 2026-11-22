@@ -872,6 +872,11 @@ fn plane_at_angle_from_one_line_follows_its_sketch_and_survives_reopening() {
     let made = run(&mut s, "construct.plane.at_angle", json!({"sketch_line":pick,"angle":"60 deg","name":"Tilt"}));
     assert!(zero.get("param_warnings").is_none() && made.get("param_warnings").is_none());
     let id = made["feature"].as_u64().unwrap();
+    run(
+        &mut s,
+        "construct.plane.at_angle",
+        json!({"sketch_line":pick,"angle":"60 deg","name":"Pivoted","direction_only":true,"pivot":{"sketch":sketch,"point":"rail.end"}}),
+    );
     for params in [
         json!({"sketch_line":{"sketch":sketch,"curve":"missing"},"angle":10}),
         json!({"sketch_line":{"sketch":sketch,"curve":"ring"},"angle":10}),
@@ -883,8 +888,13 @@ fn plane_at_angle_from_one_line_follows_its_sketch_and_survives_reopening() {
     let check = |s: &Session, rise: f64, height: f64| {
         let base = plane(s, "Shelf");
         let zero = plane(s, "Zero");
-        assert!(near(zero.origin, base.origin) && near(zero.normal(), base.normal()));
+        let midpoint = base.to_world(solidcore_record::Vec2::new(50.0, rise * 0.5));
+        let end = base.to_world(solidcore_record::Vec2::new(100.0, rise));
+        assert!(near(zero.origin, midpoint) && near(zero.normal(), base.normal()));
+        let pivoted = plane(s, "Pivoted");
+        assert!(near(pivoted.origin, end));
         let tilted = plane(s, "Tilt");
+        assert!(near(tilted.origin, midpoint));
         assert!(tilted.height(base.to_world(solidcore_record::Vec2::ZERO)).abs() < 1e-6);
         assert!(tilted.height(base.to_world(solidcore_record::Vec2::new(100.0, rise))).abs() < 1e-6);
         assert!((tilted.normal().dot(base.normal()) - 0.5).abs() < 1e-6);
@@ -909,7 +919,22 @@ fn plane_at_angle_from_one_line_follows_its_sketch_and_survives_reopening() {
     let _ = std::fs::remove_dir_all(&dir);
     check(&reopened, 70.0, 12.0);
     run(&mut reopened, "parameters.change", json!({"name":"height","expression":"25 mm"}));
-    check(&reopened, 70.0, 25.0);
+    let anchored = check(&reopened, 70.0, 25.0);
+    let mut legacy = serde_json::from_str::<serde_json::Value>(&reopened.doc.to_json()).unwrap();
+    legacy["features"].as_array_mut().unwrap().iter_mut().find(|feature| feature["id"] == id).unwrap()["plane"]
+        .as_object_mut()
+        .unwrap()
+        .remove("anchor_origin");
+    reopened = Session::new(solidcraft_doc::Document::from_json(&legacy.to_string()).unwrap());
+    let legacy_plane = plane(&reopened, "Tilt");
+    assert!(near(legacy_plane.origin, plane(&reopened, "Shelf").origin));
+    assert!(near(legacy_plane.normal(), anchored.normal()));
+    run(
+        &mut reopened,
+        "timeline.redefine",
+        json!({"feature":id,"command":"construct.plane.at_angle","params":{"sketch_line":pick,"angle":"30 deg"}}),
+    );
+    assert!(near(plane(&reopened, "Tilt").origin, legacy_plane.origin));
 }
 
 /// Plane at Angle with "use axis direction only": the axis direction is projected onto the base

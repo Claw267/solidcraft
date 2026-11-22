@@ -3759,6 +3759,12 @@ fn plane_at_angle_accepts_one_sketch_line_and_refills_it_for_editing() {
     assert!(
         matches!(line.as_deref(), Some(solidcraft_engine::doc::construct::GeoRef::SketchCurve { sketch: id, curve }) if *id == sketch && curve == "rail")
     );
+    let expected = Vec3::new(30.0, 10.0, 0.0);
+    let (name, _, quad) = crate::viewport::construction_quads(&h.app).into_iter().next().unwrap();
+    assert!(((quad[0] + quad[2]) * 0.5).dist(expected) < 1e-6);
+    let attached = h.app.run("sketch.create", json!({"plane":name})).unwrap()["sketch"].as_u64().unwrap();
+    let world = h.app.session.world_state().unwrap();
+    assert!(world.sketch(attached).unwrap().plane.origin.dist(expected) < 1e-6);
 }
 
 /// Plane at Angle draws the tilted plane while its dialog is open, when created and when edited,

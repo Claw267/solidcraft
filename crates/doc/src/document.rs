@@ -87,6 +87,9 @@ pub enum PlaneRef {
         /// Pivot for `direction_only`; absent means the base plane's origin.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pivot: Option<Box<GeoRef>>,
+        /// Place the local origin at the sketch line midpoint or the projected pivot.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        anchor_origin: bool,
     },
     /// A construction plane feature (by id).
     Construction {
@@ -5278,10 +5281,13 @@ impl Document {
                 let b = self.resolve_plane_in(vals, base, depth + 1, component, st)?;
                 Ok(b.offset(Self::eval_in(vals, distance, Kind::Length)?))
             }
-            PlaneRef::AtAngle { base, axis_origin, axis_dir, angle, line, direction_only, pivot } => {
+            PlaneRef::AtAngle { base, axis_origin, axis_dir, angle, line, direction_only, pivot, anchor_origin } => {
                 let model = || st.ok_or_else(|| DocError::Invalid("this plane is built from the model: evaluate first".into()));
-                let (b, axis_origin, axis_dir) = match line.as_deref() {
-                    Some(GeoRef::SketchCurve { sketch, curve }) => crate::construct::sketch_line_frame(model()?, *sketch, curve)?,
+                let (b, axis_origin, axis_dir, midpoint) = match line.as_deref() {
+                    Some(GeoRef::SketchCurve { sketch, curve }) => {
+                        let (plane, origin, dir, midpoint) = crate::construct::sketch_line_frame(model()?, *sketch, curve)?;
+                        (plane, origin, dir, anchor_origin.then_some(midpoint))
+                    }
                     other => {
                         let b = self.resolve_plane_in(vals, base, depth + 1, component, st)?;
                         let (origin, dir) = match other {
@@ -5301,7 +5307,7 @@ impl Document {
                                 (o, *axis_dir)
                             }
                         };
-                        (b, origin, dir)
+                        (b, origin, dir, None)
                     }
                 };
                 let a = Self::eval_in(vals, angle, Kind::Angle)?;
@@ -5316,7 +5322,7 @@ impl Document {
                             let st = st.ok_or_else(|| DocError::Invalid("this plane is built from the model: evaluate first".into()))?;
                             crate::construct::point(&crate::construct::Ctx { doc: self, vals, st, depth, component }, g)?
                         }
-                        None => b.origin,
+                        None => midpoint.unwrap_or(b.origin),
                     };
                     // Keep the pivot in the base so a slightly off pick still turns about an in-plane line.
                     let pivot = pivot - n * n.dot(pivot - b.origin);
@@ -5326,7 +5332,11 @@ impl Document {
                     (axis_origin, d)
                 };
                 let rot = |v: Vec3| v * a.cos() + d.cross(v) * a.sin() + d * (d.dot(v) * (1.0 - a.cos()));
-                let o = axis_origin + rot(b.origin - axis_origin);
+                let o = match midpoint {
+                    Some(midpoint) if !direction_only => midpoint,
+                    Some(_) => axis_origin,
+                    None => axis_origin + rot(b.origin - axis_origin),
+                };
                 Plane::new(o, rot(b.x), rot(b.y)).ok_or_else(|| DocError::Invalid("degenerate plane".into()))
             }
             PlaneRef::Flipped { base, about_y } => Ok(self.resolve_plane_in(vals, base, depth + 1, component, st)?.flipped(*about_y)),

@@ -778,7 +778,8 @@ pub struct PlaneAtAngleParams {
     /// How far to turn, counterclockwise looking back along `axis`'s direction.
     pub angle: AngleExpr,
     /// Use only the axis direction (projected onto `base`), not the axis as a full line.
-    /// When true, the plane turns about the line through `pivot` (or the base origin).
+    /// When true, the plane turns through `pivot`. With no pivot, it turns through the sketch
+    /// line midpoint when using `sketch_line`, or the origin of an explicit base.
     #[serde(default)]
     pub direction_only: Option<bool>,
     /// Pivot for `direction_only`: a vertex, sketch point, construction point or fixed point.

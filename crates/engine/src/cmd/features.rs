@@ -3397,7 +3397,7 @@ fn plane_angle(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let sketch = pick.get("sketch").and_then(Value::as_u64).ok_or_else(|| bad(cmd, "`sketch_line.sketch` must be a sketch id"))?;
         let curve = str_(pick, "curve").ok_or_else(|| bad(cmd, "`sketch_line.curve` must name a straight sketch line"))?;
-        let (plane, origin, dir) =
+        let (plane, origin, dir, _) =
             solidcraft_doc::construct::sketch_line_frame(&*s.world_state()?, sketch, curve).map_err(|e| bad(cmd, format!("`sketch_line`: {e}")))?;
         (solidcraft_doc::point_expr(origin), dir, Some(GeoRef::SketchCurve { sketch, curve: curve.into() }), Some(PlaneRef::Custom { plane }))
     } else {
@@ -3426,6 +3426,7 @@ fn plane_angle(s: &mut Session, p: &Value) -> Result<Value> {
         line: line.clone(),
         direction_only,
         pivot: pivot.clone(),
+        anchor_origin: sketch_line.is_some(),
     };
     if let Some(base) = sketch_base {
         return add_feature(s, p, FeatureKind::ConstructionPlane { plane: at_angle(base) });

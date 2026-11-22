@@ -683,12 +683,13 @@ pub fn model_axis_in(doc: Option<&Document>, st: &ModelState, g: &GeoRef, compon
     }
 }
 
-/// The solved plane and directed axis of a straight line in a 2D sketch, in the state's frame.
-pub fn sketch_line_frame(st: &ModelState, sketch: u64, curve: &str) -> Result<(Plane, Vec3, Vec3)> {
+/// The solved plane, directed axis, and midpoint of a straight 2D sketch line, in the state's frame.
+pub fn sketch_line_frame(st: &ModelState, sketch: u64, curve: &str) -> Result<(Plane, Vec3, Vec3, Vec3)> {
     let solved = st.sketch(sketch).ok_or_else(|| DocError::Unknown(format!("sketch {sketch}")))?;
     let (origin, dir) = crate::eval::sketch_line_world(solved, curve)?;
-    let dir = dir.normalized().filter(|dir| dir.is_finite()).ok_or_else(|| bad(format!("`{curve}` has no direction")))?;
-    Ok((solved.plane, origin, dir))
+    let midpoint = origin + dir * 0.5;
+    let dir = dir.normalized().filter(|_| midpoint.is_finite()).ok_or_else(|| bad(format!("`{curve}` has no direction")))?;
+    Ok((solved.plane, origin, dir, midpoint))
 }
 
 /// `d` or `-d`, whichever has its largest component (the first of equal ones) positive: how
