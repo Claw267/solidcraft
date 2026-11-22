@@ -1,0 +1,31 @@
+name: Plane at Angle Windows test build
+
+on:
+  push:
+    branches:
+      - build/plane-angle-windows
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - name: Build SolidCraft
+        shell: pwsh
+        run: |
+          $env:SOLIDCRAFT_VERSION = "0.45.0-test+f9156ee7"
+          $env:CARGO_INCREMENTAL = "0"
+          cargo build --locked --profile ci -p solidcraft
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: SolidCraft-Plane-at-Angle-Windows-x64
+          path: target/ci/solidcraft.exe
+          if-no-files-found: error
+          retention-days: 7
